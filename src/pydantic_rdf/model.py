@@ -504,7 +504,7 @@ class BaseRdfModel(BaseModel):
         elif isinstance(exclude, set):
             exclude = set(exclude) | nested_fields
         elif isinstance(exclude, dict):
-            exclude = {**exclude, **{name: True for name in nested_fields}}
+            exclude = {**exclude, **dict.fromkeys(nested_fields, True)}
         else:
             raise TypeError(f"Unsupported exclude type: {type(exclude).__name__}")
         dumped = self.model_dump(exclude=exclude, **dump_options)
