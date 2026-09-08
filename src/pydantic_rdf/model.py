@@ -333,6 +333,9 @@ class BaseRdfModel(BaseModel):
     def all_entities(cls: type[T], graph: Graph) -> list[T]:
         """Return all entities of this model's RDF type from the graph.
 
+        Reuses one parse cache for the complete result set, avoiding redundant parsing
+        when entities share nested RDF resources.
+
         Returns:
             A list of model instances for each entity of this RDF type in the graph.
 
@@ -346,8 +349,11 @@ class BaseRdfModel(BaseModel):
             entities = MyModel.all_entities(graph)
             ```
         """
+        cache: RDFEntityCache = {}
         return [
-            cls.parse_graph(graph, uri) for uri in graph.subjects(RDF.type, cls.rdf_type) if isinstance(uri, URIRef)
+            cls.parse_graph(graph, uri, _cache=cache)
+            for uri in graph.subjects(RDF.type, cls.rdf_type)
+            if isinstance(uri, URIRef)
         ]
 
     # SERIALIZATION

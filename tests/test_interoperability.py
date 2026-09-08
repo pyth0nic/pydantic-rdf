@@ -79,3 +79,27 @@ def test_cyclic_serialization_is_rejected(EX: Namespace):
 
     with pytest.raises(CircularReferenceError):
         first.model_dump_rdf()
+
+
+def test_all_entities_reuses_nested_models(graph: Graph, EX: Namespace):
+    class Author(BaseRdfModel):
+        rdf_type = EX.Author
+        _rdf_namespace = EX
+
+        name: str
+
+    class Book(BaseRdfModel):
+        rdf_type = EX.Book
+        _rdf_namespace = EX
+
+        author: Author
+        title: str
+
+    shared_author = Author(uri=EX.author, name="Ada")
+    graph += Book(uri=EX.book_one, title="One", author=shared_author).model_dump_rdf()
+    graph += Book(uri=EX.book_two, title="Two", author=shared_author).model_dump_rdf()
+
+    books = Book.all_entities(graph)
+
+    assert len(books) == 2
+    assert books[0].author is books[1].author

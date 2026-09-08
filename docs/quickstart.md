@@ -159,6 +159,21 @@ Pydantic field aliases are used as default RDF predicate local names, so
 such as `exclude_none=True`. PEP 604 optional fields, annotated fields, and list, tuple,
 set, and frozenset collections are supported.
 
+## Efficient Bulk Loading
+
+Use `Model.all_entities(graph)` to load all resources of a type. It shares one parse cache
+for the batch, so nested resources referenced by several models are parsed once and retain
+their shared identity. This avoids repeated graph traversals for common relationship graphs.
+
+## More Examples
+
+- [`basic_usage.py`](https://github.com/Omegaice/pydantic-rdf/blob/master/examples/basic_usage.py):
+  Schema.org people, addresses, and repeated predicates.
+- [`sparql_integration.py`](https://github.com/Omegaice/pydantic-rdf/blob/master/examples/sparql_integration.py):
+  query RDF with SPARQL before converting results to models.
+- [`rdf_features.py`](https://github.com/Omegaice/pydantic-rdf/blob/master/examples/rdf_features.py):
+  aliases, URI references, language-tagged and datatype literals, RDF lists, and sets.
+
 ## Migration from Earlier Releases
 
 PydanticRDF now requires Pydantic 2.12 or newer. Upgrade the lock file with
