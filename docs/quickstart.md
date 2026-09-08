@@ -173,6 +173,33 @@ their shared identity. This avoids repeated graph traversals for common relation
   query RDF with SPARQL before converting results to models.
 - [`rdf_features.py`](https://github.com/Omegaice/pydantic-rdf/blob/master/examples/rdf_features.py):
   aliases, URI references, language-tagged and datatype literals, RDF lists, and sets.
+- [`schema_export.py`](https://github.com/Omegaice/pydantic-rdf/blob/master/examples/schema_export.py):
+  OWL ontologies, SHACL constraints, versions, Turtle, and JSON-LD output.
+
+## Semantic Schema Export
+
+`model_dump_schema_rdf()` generates an RDFLib graph containing an OWL class and properties
+alongside a SHACL node shape. Required Pydantic fields become `sh:minCount 1`; scalar fields
+become `sh:maxCount 1`; nested models are object properties; and standard Python scalar types
+map to XSD datatypes.
+
+```python
+schema = Person.model_dump_schema_rdf(
+    ontology=EX.ontology,
+    version="1.0.0",
+    version_iri=EX.ontology_v1,
+)
+schema.serialize(destination="person-schema.ttl", format="turtle")
+```
+
+Pass a filename, `pathlib.Path`, or writable text stream directly to export. RDFLib selects
+the serialization through `format`, including `"turtle"` (`.ttl`), `"json-ld"`, `"xml"`
+(RDF/XML), and `"n3"`.
+
+```python
+with open("person-schema.jsonld", "w", encoding="utf-8") as output:
+    Person.model_dump_schema_rdf(output, format="json-ld", ontology=EX.ontology)
+```
 
 ## Migration from Earlier Releases
 

@@ -1,8 +1,9 @@
+from io import StringIO
 from typing import Annotated
 
 import pytest
 from pydantic import Field
-from rdflib import RDF, XSD, BNode, Graph, Literal, Namespace
+from rdflib import OWL, RDF, RDFS, SH, XSD, BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
 
 from pydantic_rdf import BaseRdfModel, WithDataType, WithLanguage, WithRdfList
@@ -103,3 +104,31 @@ def test_all_entities_reuses_nested_models(graph: Graph, EX: Namespace):
 
     assert len(books) == 2
     assert books[0].author is books[1].author
+
+
+def test_schema_export_supports_owl_shacl_versioning_and_streams(EX: Namespace):
+    class Author(BaseRdfModel):
+        rdf_type = EX.Author
+        _rdf_namespace = EX
+
+        name: str
+
+    class Book(BaseRdfModel):
+        rdf_type = EX.Book
+        _rdf_namespace = EX
+
+        title: str = Field(description="The book title")
+        author: Author
+        pages: int | None = None
+
+    schema = Book.model_dump_schema_rdf(ontology=EX.ontology, version="1.2.0", version_iri=EX.ontology_v1_2_0)
+    assert (EX.ontology, RDF.type, OWL.Ontology) in schema
+    assert (EX.ontology, OWL.versionInfo, Literal("1.2.0")) in schema
+    assert (EX.Book, RDF.type, OWL.Class) in schema
+    assert (EX.author, RDF.type, OWL.ObjectProperty) in schema
+    assert (EX.author, RDFS.range, EX.Author) in schema
+    assert (URIRef(f"{EX.Book}Shape"), SH.targetClass, EX.Book) in schema
+
+    stream = StringIO()
+    assert Book.model_dump_schema_rdf(stream, format="turtle") is None
+    assert "owl:Ontology" in stream.getvalue()

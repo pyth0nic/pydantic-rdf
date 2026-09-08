@@ -1,8 +1,11 @@
 import json
 import logging
 from collections.abc import MutableMapping, Sequence
+from datetime import date, datetime, time
+from pathlib import Path
 from types import UnionType
 from typing import (
+    IO,
     Annotated,
     Any,
     ClassVar,
@@ -18,7 +21,7 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.fields import FieldInfo
-from rdflib import RDF, BNode, Graph, Literal, URIRef
+from rdflib import OWL, RDF, RDFS, SH, XSD, BNode, Graph, Literal, URIRef
 from rdflib.collection import Collection
 from rdflib.term import Node
 
@@ -38,6 +41,7 @@ _IN_PROGRESS: Final = object()
 
 CacheKey: TypeAlias = tuple[type["BaseRdfModel"], URIRef]
 RDFEntityCache: TypeAlias = MutableMapping[CacheKey, object]
+RdfDestination: TypeAlias = str | Path | IO[str]
 
 
 class BaseRdfModel(BaseModel):
@@ -355,6 +359,94 @@ class BaseRdfModel(BaseModel):
             for uri in graph.subjects(RDF.type, cls.rdf_type)
             if isinstance(uri, URIRef)
         ]
+
+    @classmethod
+    def _schema_range(cls, annotation: Any) -> tuple[URIRef, bool]:
+        """Return the RDF range and whether it represents a resource."""
+        item_type = cls._get_item_type(annotation)
+        if model_type := cls._extract_model_type(item_type):
+            return model_type.rdf_type, True
+        if item_type is URIRef:
+            return RDFS.Resource, True
+        datatype_ranges: dict[type[object], URIRef] = {
+            str: XSD.string,
+            bool: XSD.boolean,
+            int: XSD.integer,
+            float: XSD.double,
+            date: XSD.date,
+            datetime: XSD.dateTime,
+            time: XSD.time,
+        }
+        return datatype_ranges.get(item_type, RDFS.Literal), False
+
+    @classmethod
+    def model_dump_schema_rdf(
+        cls: type[T],
+        destination: RdfDestination | None = None,
+        *,
+        format: str = "turtle",
+        ontology: URIRef | None = None,
+        version: str | None = None,
+        version_iri: URIRef | None = None,
+    ) -> Graph | str | None:
+        """Generate an OWL ontology and SHACL shape graph for the model.
+
+        Args:
+            destination: A filename, path, or writable text stream for serialized RDF.
+            format: Any RDFLib serializer format, such as ``"turtle"``, ``"json-ld"``,
+                ``"xml"``, or ``"n3"``.
+            ontology: URI identifying the generated ontology.
+            version: Optional ontology version string.
+            version_iri: Optional URI identifying this ontology version.
+
+        Returns:
+            The schema graph when no destination is provided, otherwise RDFLib's
+            serialized string result.
+        """
+        graph = Graph()
+        graph.bind("owl", OWL)
+        graph.bind("rdfs", RDFS)
+        graph.bind("sh", SH)
+        graph.bind("xsd", XSD)
+
+        ontology = ontology or URIRef(str(cls._rdf_namespace))
+        shape = URIRef(f"{cls.rdf_type}Shape")
+        graph.add((ontology, RDF.type, OWL.Ontology))
+        graph.add((cls.rdf_type, RDF.type, OWL.Class))
+        graph.add((shape, RDF.type, SH.NodeShape))
+        graph.add((shape, SH.targetClass, cls.rdf_type))
+        if version is not None:
+            graph.add((ontology, OWL.versionInfo, Literal(version)))
+        if version_iri is not None:
+            graph.add((ontology, OWL.versionIRI, version_iri))
+
+        for field_name, field in cls.model_fields.items():
+            if field_name == "uri":
+                continue
+            predicate = cls._get_field_predicate(field_name, field)
+            rdf_range, is_resource = cls._schema_range(field.annotation)
+            type_info = cls._resolve_type_info(field.annotation)
+            graph.add((predicate, RDF.type, OWL.ObjectProperty if is_resource else OWL.DatatypeProperty))
+            graph.add((predicate, RDFS.domain, cls.rdf_type))
+            graph.add((predicate, RDFS.range, rdf_range))
+            if field.description:
+                graph.add((predicate, RDFS.comment, Literal(field.description)))
+
+            property_shape = BNode()
+            graph.add((shape, SH.property, property_shape))
+            graph.add((property_shape, SH.path, predicate))
+            graph.add((property_shape, SH["class"] if is_resource else SH.datatype, rdf_range))
+            if field.is_required():
+                graph.add((property_shape, SH.minCount, Literal(1)))
+            if not type_info.is_list:
+                graph.add((property_shape, SH.maxCount, Literal(1)))
+
+        if destination is None:
+            return graph
+        if hasattr(destination, "write"):
+            destination.write(graph.serialize(format=format))
+            return None
+        return graph.serialize(destination=destination, format=format)
 
     # SERIALIZATION
     def _rdf_object(self, value: Any, field: FieldInfo) -> Node:
