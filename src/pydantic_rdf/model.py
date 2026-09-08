@@ -268,6 +268,17 @@ class BaseRdfModel(BaseModel):
         # Process the values based on their type
         if type_info.is_list:
             if WithRdfList.extract(field):
+                annotation = field.annotation
+                while True:
+                    if (inner := cls._get_annotated_type(annotation)) is not None:
+                        annotation = inner
+                        continue
+                    if (inner := cls._get_union_type(annotation)) is not None:
+                        annotation = inner
+                        continue
+                    break
+                if get_origin(annotation) in (set, frozenset):
+                    raise ValueError(f"WithRdfList requires an ordered collection (list/tuple): {field_name}")
                 if len(values) != 1:
                     raise ValueError(f"Expected one RDF list for field {field_name}")
                 values = cls._values_from_rdf_list(graph, values[0])
