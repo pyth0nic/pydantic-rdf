@@ -1,4 +1,6 @@
+from datetime import date, datetime, time
 from io import StringIO
+from pathlib import Path
 from typing import Annotated
 
 import pytest
@@ -6,7 +8,7 @@ from pydantic import Field
 from rdflib import OWL, RDF, RDFS, SH, XSD, BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
 
-from pydantic_rdf import BaseRdfModel, WithDataType, WithLanguage, WithRdfList
+from pydantic_rdf import BaseRdfModel, WithDataType, WithLanguage, WithPredicate, WithRdfList
 from pydantic_rdf.exceptions import CircularReferenceError, UnsupportedRdfTermError
 from pydantic_rdf.types import PydanticURIRef
 
@@ -132,3 +134,54 @@ def test_schema_export_supports_owl_shacl_versioning_and_streams(EX: Namespace):
     stream = StringIO()
     assert Book.model_dump_schema_rdf(stream, format="turtle") is None
     assert "owl:Ontology" in stream.getvalue()
+
+
+def test_schema_export_writes_parseable_formats_to_path(tmp_path: Path, EX: Namespace):
+    class Event(BaseRdfModel):
+        rdf_type = EX.Event
+        _rdf_namespace = EX
+
+        happened_on: date
+        happened_at: datetime
+        happened_time: time
+        is_public: bool
+        labels: list[str]
+
+    for suffix, format in ((".ttl", "turtle"), (".jsonld", "json-ld"), (".rdf", "xml")):
+        destination = tmp_path / f"event-schema{suffix}"
+        Event.model_dump_schema_rdf(destination, format=format)
+        assert destination.exists()
+        parsed = Graph().parse(destination, format=format)
+        assert (EX.happened_on, RDFS.range, XSD.date) in parsed
+        assert (EX.happened_at, RDFS.range, XSD.dateTime) in parsed
+        assert (EX.happened_time, RDFS.range, XSD.time) in parsed
+        assert (EX.is_public, RDFS.range, XSD.boolean) in parsed
+
+
+def test_schema_export_represents_predicates_and_cardinality(EX: Namespace):
+    class Tag(BaseRdfModel):
+        rdf_type = EX.Tag
+        _rdf_namespace = EX
+
+        label: str
+
+    class Article(BaseRdfModel):
+        rdf_type = EX.Article
+        _rdf_namespace = EX
+
+        title: Annotated[str, WithPredicate(EX.headline)]
+        tags: list[Tag] = Field(default_factory=list)
+        published: bool | None = None
+
+    schema = Article.model_dump_schema_rdf()
+    shape = URIRef(f"{EX.Article}Shape")
+    title_shape = next(
+        candidate for candidate in schema.objects(shape, SH.property) if (candidate, SH.path, EX.headline) in schema
+    )
+
+    assert (EX.headline, RDF.type, OWL.DatatypeProperty) in schema
+    assert (title_shape, SH.minCount, Literal(1)) in schema
+    assert (title_shape, SH.maxCount, Literal(1)) in schema
+    assert (EX.tags, RDF.type, OWL.ObjectProperty) in schema
+    assert (EX.tags, RDFS.range, EX.Tag) in schema
+    assert (EX.published, RDFS.range, XSD.boolean) in schema

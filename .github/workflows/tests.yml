@@ -35,4 +35,4 @@ jobs:
       - name: Test dependency combination
         run: uv pip install --upgrade "pydantic${{ matrix.pydantic }}" "rdflib${{ matrix.rdflib }}"
       - name: Run tests
-        run: uv run pytest tests
+        run: uv run pytest tests --cov=pydantic_rdf --cov-report=xml --cov-fail-under=90
