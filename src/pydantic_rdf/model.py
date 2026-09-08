@@ -485,8 +485,16 @@ class BaseRdfModel(BaseModel):
             if type(self)._extract_model_type(field.annotation) is not None
         }
         dump_options = dict(model_dump_kwargs)
-        excluded = set(dump_options.pop("exclude", set())) | nested_fields
-        dumped = self.model_dump(exclude=excluded, **dump_options)
+        exclude = dump_options.pop("exclude", None)
+        if exclude is None:
+            exclude = set(nested_fields)
+        elif isinstance(exclude, set):
+            exclude = set(exclude) | nested_fields
+        elif isinstance(exclude, dict):
+            exclude = {**exclude, **{name: True for name in nested_fields}}
+        else:
+            raise TypeError(f"Unsupported exclude type: {type(exclude).__name__}")
+        dumped = self.model_dump(exclude=exclude, **dump_options)
 
         for field_name, field in type(self).model_fields.items():
             if field_name == "uri":
