@@ -121,6 +121,52 @@ post = BlogPosting(
 graph = post.model_dump_rdf()
 ```
 
+Lists use repeated predicate triples by default because RDF graphs are unordered. Use
+`WithRdfList()` when collection order is meaningful; it stores the values as an RDF
+collection and restores their order when parsing.
+
+```python
+from typing import Annotated
+from pydantic_rdf import WithRdfList
+
+tracks: Annotated[list[str], WithRdfList()]
+```
+
+## RDF Term and Literal Mapping
+
+`PydanticURIRef` fields are emitted as RDF resource references, not string literals.
+Use `WithDataType` to select a literal datatype and `WithLanguage` for language-tagged
+strings.
+
+```python
+from typing import Annotated
+from rdflib.namespace import XSD
+from pydantic_rdf import WithDataType, WithLanguage
+
+title: Annotated[str, WithLanguage("en")]
+price: Annotated[float, WithDataType(XSD.decimal)]
+```
+
+Blank nodes are intentionally unsupported as model identifiers or nested resources and
+raise `UnsupportedRdfTermError`; use stable URI references for RDF entities. Dictionaries
+are stored as JSON literals. Native RDFLib literals preserve standard temporal datatypes.
+
+## Pydantic Integration
+
+Pydantic field aliases are used as default RDF predicate local names, so
+`display_name: str = Field(alias="displayName")` maps to `namespace:displayName`.
+`model_dump_rdf()` accepts the same keyword serialization options as `model_dump()`,
+such as `exclude_none=True`. PEP 604 optional fields, annotated fields, and list, tuple,
+set, and frozenset collections are supported.
+
+## Migration from Earlier Releases
+
+PydanticRDF now requires Pydantic 2.12 or newer. Upgrade the lock file with
+`uv lock --upgrade-package pydantic`, then synchronize with `uv sync --all-groups`.
+Existing list fields keep their repeated-triple mapping; add `WithRdfList()` only where
+ordering needs to be preserved. URI fields previously emitted as literals are now RDF
+resource references.
+
 ## JSON Schema Generation
 
 PydanticRDF supports generating valid JSON schemas for your RDF models:

@@ -24,8 +24,8 @@ Example:
     ```
 """
 
-from pydantic_rdf.annotation import WithDataType, WithPredicate
+from pydantic_rdf.annotation import WithDataType, WithLanguage, WithPredicate, WithRdfList
 from pydantic_rdf.model import BaseRdfModel
 
 __version__ = "0.2.0"
-__all__ = ["BaseRdfModel", "WithDataType", "WithPredicate"]
+__all__ = ["BaseRdfModel", "WithDataType", "WithLanguage", "WithPredicate", "WithRdfList"]

@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import MutableMapping, Sequence
+from types import UnionType
 from typing import (
     Annotated,
     Any,
@@ -17,10 +18,12 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.fields import FieldInfo
-from rdflib import RDF, Graph, Literal, URIRef
+from rdflib import RDF, BNode, Graph, Literal, URIRef
+from rdflib.collection import Collection
+from rdflib.term import Node
 
-from pydantic_rdf.annotation import WithPredicate
-from pydantic_rdf.exceptions import CircularReferenceError, UnsupportedFieldTypeError
+from pydantic_rdf.annotation import WithDataType, WithLanguage, WithPredicate, WithRdfList
+from pydantic_rdf.exceptions import CircularReferenceError, UnsupportedFieldTypeError, UnsupportedRdfTermError
 from pydantic_rdf.types import IsDefinedNamespace, IsPrefixNamespace, PydanticURIRef, TypeInfo
 
 logger = logging.getLogger(__name__)
@@ -58,7 +61,7 @@ class BaseRdfModel(BaseModel):
         """
         if predicate := WithPredicate.extract(field):
             return predicate
-        return cls._rdf_namespace[field_name]
+        return cls._rdf_namespace[field.serialization_alias or field.alias or field_name]
 
     @staticmethod
     def _get_annotated_type(annotation: Any) -> Any | None:
@@ -84,7 +87,7 @@ class BaseRdfModel(BaseModel):
         Returns:
             The first non-None type in the Union, or None if not a Union.
         """
-        if get_origin(annotation) is Union:
+        if get_origin(annotation) in (Union, UnionType):
             # Return the first non-None type (for Optional/Union)
             return next((arg for arg in get_args(annotation) if arg is not type(None)), None)
         return None
@@ -100,7 +103,9 @@ class BaseRdfModel(BaseModel):
             The item type if annotation is a Sequence (not str), else None.
         """
         origin = get_origin(annotation)
-        if isinstance(origin, type) and issubclass(origin, Sequence) and not issubclass(origin, str):
+        if origin in (list, tuple, set, frozenset) or (
+            isinstance(origin, type) and issubclass(origin, Sequence) and not issubclass(origin, str)
+        ):
             return get_args(annotation)[0]
         return None
 
@@ -129,12 +134,12 @@ class BaseRdfModel(BaseModel):
         Returns:
             TypeInfo indicating whether the annotation is a list and its item type.
         """
-        if (item_type := cls._get_sequence_type(annotation)) is not None:
-            return TypeInfo(is_list=True, item_type=item_type)
         if (item_type := cls._get_annotated_type(annotation)) is not None:
             return cls._resolve_type_info(item_type)
         if (item_type := cls._get_union_type(annotation)) is not None:
-            return TypeInfo(is_list=False, item_type=cls._get_item_type(item_type))
+            return cls._resolve_type_info(item_type)
+        if (item_type := cls._get_sequence_type(annotation)) is not None:
+            return TypeInfo(is_list=True, item_type=cls._get_item_type(item_type))
         return TypeInfo(is_list=False, item_type=annotation)
 
     # FIELD EXTRACTION AND CONVERSION
@@ -151,6 +156,12 @@ class BaseRdfModel(BaseModel):
         # Self reference
         if type_annotation is Self:
             return cls
+
+        if (item_type := cls._get_annotated_type(type_annotation)) is not None:
+            return cls._extract_model_type(item_type)
+
+        if (item_type := cls._get_sequence_type(type_annotation)) is not None:
+            return cls._extract_model_type(item_type)
 
         # Direct BaseRdfModel type
         if get_origin(type_annotation) is None:
@@ -185,6 +196,9 @@ class BaseRdfModel(BaseModel):
             CircularReferenceError: If a circular reference is detected during parsing.
         """
         # Check if this is a nested BaseRdfModel
+        if isinstance(value, BNode):
+            raise UnsupportedRdfTermError(value)
+
         if (model_type := cls._extract_model_type(type_annotation)) and isinstance(value, URIRef):
             # Handle nested BaseRdfModel instances with caching to prevent recursion
             if cached := cache.get((model_type, value)):
@@ -198,7 +212,7 @@ class BaseRdfModel(BaseModel):
         if isinstance(value, Literal):
             python_value = value.toPython()
             # Handle JSON strings for dictionary fields
-            origin = get_origin(type_annotation)
+            origin = get_origin(cls._get_item_type(type_annotation))
             if origin is dict and isinstance(python_value, str):
                 try:
                     return json.loads(python_value)
@@ -207,6 +221,13 @@ class BaseRdfModel(BaseModel):
             return python_value
 
         return value
+
+    @classmethod
+    def _values_from_rdf_list(cls, graph: Graph, value: object) -> list[object]:
+        """Return the members of an RDF list value."""
+        if not isinstance(value, BNode | URIRef):
+            raise UnsupportedRdfTermError(value)
+        return list(Collection(graph, value))
 
     @classmethod
     def _extract_field_value(
@@ -227,7 +248,7 @@ class BaseRdfModel(BaseModel):
         """
         # Get all values for this predicate
         predicate = cls._get_field_predicate(field_name, field)
-        values = list(graph.objects(uri, predicate))
+        values: list[object] = list(graph.objects(uri, predicate))
         if not values:
             return None
 
@@ -240,6 +261,10 @@ class BaseRdfModel(BaseModel):
 
         # Process the values based on their type
         if type_info.is_list:
+            if WithRdfList.extract(field):
+                if len(values) != 1:
+                    raise ValueError(f"Expected one RDF list for field {field_name}")
+                values = cls._values_from_rdf_list(graph, values[0])
             return [cls._convert_rdf_value(graph, v, type_info.item_type, cache) for v in values]
 
         return cls._convert_rdf_value(graph, values[0], type_info.item_type, cache)
@@ -267,6 +292,9 @@ class BaseRdfModel(BaseModel):
             model = MyModel.parse_graph(graph, EX.some_uri)
             ```
         """
+        if isinstance(uri, BNode):
+            raise UnsupportedRdfTermError(uri)
+
         # Initialize cache if not provided
         cache: RDFEntityCache = {} if _cache is None else _cache
 
@@ -290,7 +318,8 @@ class BaseRdfModel(BaseModel):
                 continue
             value = cls._extract_field_value(graph, uri, field_name, field, cache)
             if value is not None:
-                data[field_name] = value
+                validation_name = field.validation_alias or field.alias or field_name
+                data[str(validation_name)] = value
 
         # Construct the instance with validation
         instance = cls.model_validate({"uri": uri, **data})
@@ -322,7 +351,82 @@ class BaseRdfModel(BaseModel):
         ]
 
     # SERIALIZATION
-    def model_dump_rdf(self: Self) -> Graph:
+    def _rdf_object(self, value: Any, field: FieldInfo) -> Node:
+        """Convert one model value to its RDF object term."""
+        type_info = type(self)._resolve_type_info(field.annotation)
+        item_type = type(self)._get_item_type(type_info.item_type)
+        if item_type is URIRef:
+            if isinstance(value, BNode):
+                raise UnsupportedRdfTermError(value)
+            return value if isinstance(value, URIRef) else URIRef(str(value))
+        if isinstance(value, BNode):
+            raise UnsupportedRdfTermError(value)
+        if (item_type is dict or get_origin(item_type) is dict) and isinstance(value, dict):
+            value = json.dumps(value, default=str)
+        language = WithLanguage.extract(field)
+        datatype = WithDataType.extract(field)
+        return Literal(value, lang=language, datatype=datatype)
+
+    def _serialize_to_graph(
+        self: Self,
+        graph: Graph,
+        active: set[URIRef],
+        serialized: set[URIRef],
+        model_dump_kwargs: dict[str, Any],
+    ) -> None:
+        """Add this model and its reachable models to graph."""
+        if self.uri in active:
+            raise CircularReferenceError(self.uri)
+        if self.uri in serialized:
+            return
+        active.add(self.uri)
+        graph.add((self.uri, RDF.type, self.rdf_type))
+        nested_fields = {
+            field_name
+            for field_name, field in type(self).model_fields.items()
+            if type(self)._extract_model_type(field.annotation) is not None
+        }
+        dump_options = dict(model_dump_kwargs)
+        excluded = set(dump_options.pop("exclude", set())) | nested_fields
+        dumped = self.model_dump(exclude=excluded, **dump_options)
+
+        for field_name, field in type(self).model_fields.items():
+            if field_name == "uri":
+                continue
+            type_info = type(self)._resolve_type_info(field.annotation)
+            model_type = type(self)._extract_model_type(field.annotation)
+            value = getattr(self, field_name) if model_type is not None else dumped.get(field_name)
+            if value is None:
+                continue
+            predicate = self._get_field_predicate(field_name, field)
+            values = value if type_info.is_list else [value]
+
+            if WithRdfList.extract(field):
+                if not type_info.is_list:
+                    raise ValueError(f"WithRdfList requires a collection field: {field_name}")
+                list_node = BNode()
+                terms: list[Node] = []
+                for item in values:
+                    if isinstance(item, BaseRdfModel):
+                        terms.append(item.uri)
+                        item._serialize_to_graph(graph, active, serialized, model_dump_kwargs)
+                    else:
+                        terms.append(self._rdf_object(item, field))
+                Collection(graph, list_node, terms)
+                graph.add((self.uri, predicate, list_node))
+                continue
+
+            for item in values:
+                if isinstance(item, BaseRdfModel):
+                    graph.add((self.uri, predicate, item.uri))
+                    item._serialize_to_graph(graph, active, serialized, model_dump_kwargs)
+                else:
+                    graph.add((self.uri, predicate, self._rdf_object(item, field)))
+
+        active.remove(self.uri)
+        serialized.add(self.uri)
+
+    def model_dump_rdf(self: Self, **model_dump_kwargs: Any) -> Graph:
         """Serialize this model instance to an RDF graph.
 
         Returns:
@@ -334,56 +438,5 @@ class BaseRdfModel(BaseModel):
             ```
         """
         graph = Graph()
-        graph.add((self.uri, RDF.type, self.rdf_type))
-
-        dumped = self.model_dump()
-
-        for field_name, field in type(self).model_fields.items():
-            if field_name == "uri":
-                continue
-
-            type_info = type(self)._resolve_type_info(field.annotation)
-
-            # Use attribute value for BaseRdfModel fields, else use dumped value
-            if (
-                type_info.is_list
-                and isinstance(type_info.item_type, type)
-                and issubclass(type_info.item_type, BaseRdfModel)
-            ) or (isinstance(type_info.item_type, type) and issubclass(type_info.item_type, BaseRdfModel)):
-                value = getattr(self, field_name, None)
-            else:
-                value = dumped.get(field_name, None)
-
-            if value is None:
-                continue
-
-            predicate = self._get_field_predicate(field_name, field)
-
-            # Handle list fields
-            if type_info.is_list and isinstance(value, list):
-                if isinstance(type_info.item_type, type) and issubclass(type_info.item_type, BaseRdfModel):
-                    for item in value:
-                        if isinstance(item, BaseRdfModel):
-                            graph.add((self.uri, predicate, item.uri))
-                            graph += item.model_dump_rdf()
-                    continue
-                else:
-                    # List of simple types
-                    for item in value:
-                        graph.add((self.uri, predicate, Literal(item)))
-                    continue
-
-            # Handle single BaseRdfModel
-            if isinstance(type_info.item_type, type) and issubclass(type_info.item_type, BaseRdfModel):
-                if isinstance(value, BaseRdfModel):
-                    graph.add((self.uri, predicate, value.uri))
-                    graph += value.model_dump_rdf()
-            else:
-                # Special handling for dict fields: serialize as JSON string
-                origin = get_origin(type_info.item_type)
-                if origin is dict and isinstance(value, dict):
-                    graph.add((self.uri, predicate, Literal(json.dumps(value))))
-                else:
-                    graph.add((self.uri, predicate, Literal(value)))
-
+        self._serialize_to_graph(graph, set(), set(), model_dump_kwargs)
         return graph

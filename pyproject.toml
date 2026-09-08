@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "pydantic-rdf"
 version = "0.2.0"
 dependencies = [
-    "pydantic>=2.11.3",
+    "pydantic>=2.12.0",
     "rdflib>=7.1.4",
 ]
 requires-python = ">=3.11"
