@@ -92,8 +92,10 @@ class BaseRdfModel(BaseModel):
             The first non-None type in the Union, or None if not a Union.
         """
         if get_origin(annotation) in (Union, UnionType):
-            # Return the first non-None type (for Optional/Union)
-            return next((arg for arg in get_args(annotation) if arg is not type(None)), None)
+            args = get_args(annotation)
+            if type(None) in args:
+                # Return the first non-None type (for Optional)
+                return next((arg for arg in args if arg is not type(None)), None)
         return None
 
     @staticmethod
