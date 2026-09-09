@@ -64,7 +64,7 @@ loaded_person = Person.parse_graph(graph, EX.person1)
 ## Requirements
 
 - Python 3.11+
-- pydantic >= 2.11.3
+- pydantic >= 2.12.0
 - rdflib >= 7.1.4
 
 ## Documentation

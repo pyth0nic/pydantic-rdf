@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from pydantic.fields import FieldInfo
 from rdflib import URIRef
 
 
@@ -30,7 +31,7 @@ class WithPredicate:
     predicate: URIRef
 
     @classmethod
-    def extract(cls, field) -> URIRef | None:  # type: ignore
+    def extract(cls, field: FieldInfo) -> URIRef | None:
         """Extract from field annotation if present."""
         for meta in getattr(field, "metadata", []):
             if isinstance(meta, WithPredicate):
@@ -63,9 +64,34 @@ class WithDataType:
     data_type: URIRef
 
     @classmethod
-    def extract(cls, field) -> URIRef | None:  # type: ignore
+    def extract(cls, field: FieldInfo) -> URIRef | None:
         """Extract from field annotation if present."""
         for meta in getattr(field, "metadata", []):
             if isinstance(meta, WithDataType):
                 return meta.data_type
         return None
+
+
+@dataclass
+class WithLanguage:
+    """Annotation to specify the language tag for a string RDF literal."""
+
+    language: str
+
+    @classmethod
+    def extract(cls, field: FieldInfo) -> str | None:
+        """Extract the language tag from field metadata if present."""
+        for meta in getattr(field, "metadata", []):
+            if isinstance(meta, WithLanguage):
+                return meta.language
+        return None
+
+
+@dataclass
+class WithRdfList:
+    """Annotation to encode a collection as an ordered RDF list."""
+
+    @classmethod
+    def extract(cls, field: FieldInfo) -> bool:
+        """Return whether field metadata requests RDF list encoding."""
+        return any(isinstance(meta, WithRdfList) for meta in getattr(field, "metadata", []))

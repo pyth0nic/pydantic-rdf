@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "pydantic-rdf"
 version = "0.2.0"
 dependencies = [
-    "pydantic>=2.11.3",
+    "pydantic>=2.12.0",
     "rdflib>=7.1.4",
 ]
 requires-python = ">=3.11"
@@ -61,6 +61,7 @@ docs = [
 ]
 test = [
     "pytest>=8.3.5",
+    "pytest-cov>=7.1.0",
     "pytest-icdiff>=0.9",
     "pytest-sugar>=1.0.0",
 ]
@@ -94,3 +95,6 @@ show_error_codes = true
 pretty = true
 plugins = []
 exclude = "tests/.*"
+
+[tool.pytest.ini_options]
+addopts = "--cov=pydantic_rdf --cov-report=term-missing --cov-fail-under=90"

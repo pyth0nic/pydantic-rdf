@@ -15,3 +15,10 @@ class UnsupportedFieldTypeError(Exception):
     def __init__(self, field_type: object, field_name: str):
         message = f"Unsupported field type: {field_type} for field {field_name}"
         super().__init__(message)
+
+
+class UnsupportedRdfTermError(ValueError):
+    """Raised when an RDF term cannot be represented by this model."""
+
+    def __init__(self, value: object):
+        super().__init__(f"Unsupported RDF term: {value!r}")
